@@ -1,4 +1,4 @@
-name: Cluster Access Bot
+name: Cluster Access Bot (AI Enabled)
 
 on:
   issue_comment:
@@ -16,27 +16,58 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 1: Extract cluster ID only if comment contains cluster-bot
-      - name: Extract cluster ID
-        id: extract
+      # Step 1: Send comment to Hugging Face
+      - name: Detect cluster request using Hugging Face
+        id: ai
         run: |
           COMMENT="${{ github.event.comment.body }}"
           echo "Comment: $COMMENT"
 
-          if [[ "$COMMENT" =~ cluster-bot[[:space:]]+([0-9]+) ]]; then
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Bearer ${{ secrets.HF_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            https://api-inference.huggingface.co/models/facebook/bart-large-mnli \
+            -d "{
+              \"inputs\": \"$COMMENT\",
+              \"parameters\": {
+                \"candidate_labels\": [\"request cluster access\", \"not related\"]
+              }
+            }")
+
+          echo "$RESPONSE"
+
+          SCORE=$(echo "$RESPONSE" | jq '.scores[0]')
+
+          if (( $(echo "$SCORE > 0.7" | bc -l) )); then
+            echo "intent=true" >> $GITHUB_OUTPUT
+          else
+            echo "intent=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Step 2: Stop if not cluster intent
+      - name: Stop if not cluster request
+        if: steps.ai.outputs.intent == 'false'
+        run: |
+          echo "Not a cluster access request."
+          exit 0
+
+      # Step 3: Extract cluster number from text
+      - name: Extract cluster ID
+        id: extract
+        run: |
+          COMMENT="${{ github.event.comment.body }}"
+
+          if [[ "$COMMENT" =~ ([0-9]{3,6}) ]]; then
             echo "cluster_id=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
           else
             echo "cluster_id=none" >> $GITHUB_OUTPUT
           fi
 
-      # Step 2: Stop workflow if no cluster-bot keyword
-      - name: Stop if not cluster request
+      - name: Stop if no cluster ID found
         if: steps.extract.outputs.cluster_id == 'none'
-        run: |
-          echo "Not a cluster request. Exiting."
-          exit 0
+        run: exit 0
 
-      # Step 3: Get link from clusters.json
+      # Step 4: Lookup cluster link
       - name: Get cluster link
         id: fetch
         run: |
@@ -50,7 +81,7 @@ jobs:
             echo "link=$LINK" >> $GITHUB_OUTPUT
           fi
 
-      # Step 4: Reply if cluster found
+      # Step 5: Reply if found
       - name: Reply with cluster link
         if: steps.fetch.outputs.found == 'true'
         run: |
@@ -65,7 +96,7 @@ jobs:
             \"body\": \"@${USER}\n\n> ${COMMENT_BODY}\n\nHere is the cluster ${{ steps.extract.outputs.cluster_id }} link:\n${{ steps.fetch.outputs.link }}\"
           }"
 
-      # Step 5: Reply if cluster NOT found
+      # Step 6: Reply if not found
       - name: Reply cluster not available
         if: steps.fetch.outputs.found == 'false'
         run: |
