@@ -4,6 +4,10 @@ on:
   issue_comment:
     types: [created]
 
+permissions:
+  issues: write
+  contents: read
+
 jobs:
   share-cluster:
     runs-on: ubuntu-latest
@@ -12,6 +16,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Step 1: Extract cluster ID only if comment contains cluster-bot
       - name: Extract cluster ID
         id: extract
         run: |
@@ -24,25 +29,53 @@ jobs:
             echo "cluster_id=none" >> $GITHUB_OUTPUT
           fi
 
-      - name: Get cluster link from JSON
+      # Step 2: Stop workflow if no cluster-bot keyword
+      - name: Stop if not cluster request
+        if: steps.extract.outputs.cluster_id == 'none'
+        run: |
+          echo "Not a cluster request. Exiting."
+          exit 0
+
+      # Step 3: Get link from clusters.json
+      - name: Get cluster link
         id: fetch
-        if: steps.extract.outputs.cluster_id != 'none'
         run: |
           CLUSTER_ID=${{ steps.extract.outputs.cluster_id }}
           LINK=$(jq -r --arg id "$CLUSTER_ID" '.[$id]' clusters.json)
 
-          if [ "$LINK" = "null" ]; then
+          if [ "$LINK" = "null" ] || [ -z "$LINK" ]; then
             echo "found=false" >> $GITHUB_OUTPUT
           else
             echo "found=true" >> $GITHUB_OUTPUT
             echo "link=$LINK" >> $GITHUB_OUTPUT
           fi
 
-      - name: Reply in issue
+      # Step 4: Reply if cluster found
+      - name: Reply with cluster link
         if: steps.fetch.outputs.found == 'true'
         run: |
+          USER="${{ github.event.comment.user.login }}"
+          COMMENT_BODY="${{ github.event.comment.body }}"
+
           curl -X POST \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github+json" \
           https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
-          -d "{\"body\":\"Cluster ${{ steps.extract.outputs.cluster_id }} details: ${{ steps.fetch.outputs.link }}\"}"
+          -d "{
+            \"body\": \"@${USER}\n\n> ${COMMENT_BODY}\n\nHere is the cluster ${{ steps.extract.outputs.cluster_id }} link:\n${{ steps.fetch.outputs.link }}\"
+          }"
+
+      # Step 5: Reply if cluster NOT found
+      - name: Reply cluster not available
+        if: steps.fetch.outputs.found == 'false'
+        run: |
+          USER="${{ github.event.comment.user.login }}"
+          COMMENT_BODY="${{ github.event.comment.body }}"
+
+          curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
+          -d "{
+            \"body\": \"@${USER}\n\n> ${COMMENT_BODY}\n\n❌ Cluster not available.\"
+          }"
