@@ -7,47 +7,56 @@ on:
 permissions:
   issues: write
   contents: read
-  organization: read   # Required to fetch emails from org members
 
 jobs:
   share-cluster:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 0: Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 1: Detect cluster request using Hugging Face NLP
-      - name: Detect cluster request
+      # Step 1: Send comment to Hugging Face
+      - name: Detect cluster request using Hugging Face
         id: ai
         run: |
           COMMENT="${{ github.event.comment.body }}"
+          echo "Comment: $COMMENT"
+
           RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer ${{ secrets.HF_TOKEN }}" \
             -H "Content-Type: application/json" \
             https://api-inference.huggingface.co/models/facebook/bart-large-mnli \
             -d "{
               \"inputs\": \"$COMMENT\",
-              \"parameters\": {\"candidate_labels\": [\"request cluster access\", \"not related\"]}
+              \"parameters\": {
+                \"candidate_labels\": [\"request cluster access\", \"not related\"]
+              }
             }")
+
+          echo "$RESPONSE"
+
           SCORE=$(echo "$RESPONSE" | jq '.scores[0]')
+
           if (( $(echo "$SCORE > 0.7" | bc -l) )); then
             echo "intent=true" >> $GITHUB_OUTPUT
           else
             echo "intent=false" >> $GITHUB_OUTPUT
           fi
 
-      # Step 2: Stop if not a cluster request
+      # Step 2: Stop if not cluster intent
       - name: Stop if not cluster request
         if: steps.ai.outputs.intent == 'false'
-        run: exit 0
+        run: |
+          echo "Not a cluster access request."
+          exit 0
 
-      # Step 3: Extract cluster ID
+      # Step 3: Extract cluster number from text
       - name: Extract cluster ID
         id: extract
         run: |
           COMMENT="${{ github.event.comment.body }}"
+
           if [[ "$COMMENT" =~ ([0-9]{3,6}) ]]; then
             echo "cluster_id=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
           else
@@ -58,89 +67,46 @@ jobs:
         if: steps.extract.outputs.cluster_id == 'none'
         run: exit 0
 
-      # Step 4: Get cluster link from clusters.json
+      # Step 4: Lookup cluster link
       - name: Get cluster link
         id: fetch
         run: |
           CLUSTER_ID=${{ steps.extract.outputs.cluster_id }}
           LINK=$(jq -r --arg id "$CLUSTER_ID" '.[$id]' clusters.json)
-          if [ -z "$LINK" ] || [ "$LINK" = "null" ]; then
+
+          if [ "$LINK" = "null" ] || [ -z "$LINK" ]; then
             echo "found=false" >> $GITHUB_OUTPUT
           else
             echo "found=true" >> $GITHUB_OUTPUT
             echo "link=$LINK" >> $GITHUB_OUTPUT
           fi
 
-      # Step 5: Get requester's email from GitHub Org
-      - name: Get requester email
-        if: steps.fetch.outputs.found == 'true'
-        id: email
-        run: |
-          USERNAME="${{ github.event.comment.user.login }}"
-          ORG_NAME="<YOUR_ORG_NAME>"  # Replace with your GitHub org name
-
-          EMAIL=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/orgs/$ORG_NAME/members/$USERNAME" | jq -r '.email')
-
-          if [ -z "$EMAIL" ] || [ "$EMAIL" = "null" ]; then
-            echo "Cannot fetch email for $USERNAME. Ensure they are in org and email visible."
-            exit 1
-          fi
-
-          echo "email=$EMAIL" >> $GITHUB_OUTPUT
-
-      # Step 6: Grant Box access dynamically using shared link
-      - name: Grant Box access
-        if: steps.fetch.outputs.found == 'true'
-        run: |
-          LINK="${{ steps.fetch.outputs.link }}"
-          BOX_EMAIL="${{ steps.email.outputs.email }}"
-
-          # Get folder/file ID from Box shared link
-          FOLDER_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.BOX_TOKEN }}" \
-            "https://api.box.com/2.0/shared_items?shared_link=$LINK" | jq -r '.id')
-
-          if [ -z "$FOLDER_ID" ] || [ "$FOLDER_ID" = "null" ]; then
-            echo "Unable to retrieve folder ID from Box shared link"
-            exit 1
-          fi
-
-          # Add as viewer collaborator
-          curl -s -X POST https://api.box.com/2.0/collaborations \
-            -H "Authorization: Bearer ${{ secrets.BOX_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d "{
-                  \"item\": {\"id\": \"$FOLDER_ID\", \"type\": \"folder\"},
-                  \"accessible_by\": {\"login\": \"$BOX_EMAIL\", \"type\": \"user\"},
-                  \"role\": \"viewer\"
-                }"
-
-      # Step 7: Reply in GitHub with cluster link
+      # Step 5: Reply if found
       - name: Reply with cluster link
         if: steps.fetch.outputs.found == 'true'
         run: |
           USER="${{ github.event.comment.user.login }}"
           COMMENT_BODY="${{ github.event.comment.body }}"
-          LINK="${{ steps.fetch.outputs.link }}"
-          curl -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
-            -d "{
-              \"body\": \"@${USER}\n\n> ${COMMENT_BODY}\n\nHere is the cluster ${{ steps.extract.outputs.cluster_id }} link:\n$LINK\n\n✅ Access granted on Box Note.\"
-            }"
 
-      # Step 8: Reply if cluster not available
+          curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
+          -d "{
+            \"body\": \"@${USER}\n\n> ${COMMENT_BODY}\n\nHere is the cluster ${{ steps.extract.outputs.cluster_id }} link:\n${{ steps.fetch.outputs.link }}\"
+          }"
+
+      # Step 6: Reply if not found
       - name: Reply cluster not available
         if: steps.fetch.outputs.found == 'false'
         run: |
           USER="${{ github.event.comment.user.login }}"
           COMMENT_BODY="${{ github.event.comment.body }}"
+
           curl -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
-            -d "{
-              \"body\": \"@${USER}\n\n> ${COMMENT_BODY}\n\n❌ Cluster not available.\"
-            }"
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
+          -d "{
+            \"body\": \"@${USER}\n\n> ${COMMENT_BODY}\n\n❌ Cluster not available.\"
+          }"
