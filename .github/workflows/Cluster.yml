@@ -9,16 +9,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ✅ Checkout repository (IMPORTANT)
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ✅ Extract cluster ID from comment
       - name: Extract cluster ID
         id: extract
         run: |
           COMMENT="${{ github.event.comment.body }}"
-          echo "Comment received: $COMMENT"
+          echo "Comment: $COMMENT"
 
           if [[ "$COMMENT" =~ cluster-bot[[:space:]]+([0-9]+) ]]; then
             echo "cluster_id=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
@@ -26,20 +24,11 @@ jobs:
             echo "cluster_id=none" >> $GITHUB_OUTPUT
           fi
 
-      # ✅ Get link from clusters.json
-      - name: Fetch cluster link
+      - name: Get cluster link from JSON
         id: fetch
         if: steps.extract.outputs.cluster_id != 'none'
         run: |
           CLUSTER_ID=${{ steps.extract.outputs.cluster_id }}
-
-          echo "Cluster ID extracted: $CLUSTER_ID"
-
-          if [ ! -f clusters.json ]; then
-            echo "clusters.json not found!"
-            exit 1
-          fi
-
           LINK=$(jq -r --arg id "$CLUSTER_ID" '.[$id]' clusters.json)
 
           if [ "$LINK" = "null" ]; then
@@ -49,8 +38,7 @@ jobs:
             echo "link=$LINK" >> $GITHUB_OUTPUT
           fi
 
-      # ✅ Reply in issue with correct link
-      - name: Reply with Box link
+      - name: Reply in issue
         if: steps.fetch.outputs.found == 'true'
         run: |
           curl -X POST \
