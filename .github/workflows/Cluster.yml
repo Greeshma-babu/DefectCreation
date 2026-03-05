@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 0: Checkout repo
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -51,7 +52,7 @@ jobs:
           echo "Not a cluster access request."
           exit 0
 
-      # Step 3: Extract cluster ID from comment
+      # Step 3: Extract cluster ID
       - name: Extract cluster ID
         id: extract
         run: |
@@ -61,12 +62,13 @@ jobs:
             echo "cluster_id=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
           else
             echo "cluster_id=none" >> $GITHUB_OUTPUT
+          fi
 
       - name: Stop if no cluster ID found
         if: steps.extract.outputs.cluster_id == 'none'
         run: exit 0
 
-      # Step 4: Lookup cluster link & folder ID from clusters.json
+      # Step 4: Lookup cluster link & folder ID
       - name: Get cluster info
         id: fetch
         run: |
@@ -81,7 +83,7 @@ jobs:
             echo "link=$LINK" >> $GITHUB_OUTPUT
             echo "folder_id=$FOLDER_ID" >> $GITHUB_OUTPUT
 
-      # Step 5: Grant Box access to requesting user
+      # Step 5: Grant Box access to the requesting user
       - name: Grant Box access
         if: steps.fetch.outputs.found == 'true'
         run: |
