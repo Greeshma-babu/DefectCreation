@@ -9,12 +9,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # ✅ Checkout repository (IMPORTANT)
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      # ✅ Extract cluster ID from comment
       - name: Extract cluster ID
         id: extract
         run: |
           COMMENT="${{ github.event.comment.body }}"
+          echo "Comment received: $COMMENT"
 
           if [[ "$COMMENT" =~ cluster-bot[[:space:]]+([0-9]+) ]]; then
             echo "cluster_id=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
@@ -22,11 +26,19 @@ jobs:
             echo "cluster_id=none" >> $GITHUB_OUTPUT
           fi
 
-      - name: Get Box link from JSON
-        id: link
+      # ✅ Get link from clusters.json
+      - name: Fetch cluster link
+        id: fetch
         if: steps.extract.outputs.cluster_id != 'none'
         run: |
           CLUSTER_ID=${{ steps.extract.outputs.cluster_id }}
+
+          echo "Cluster ID extracted: $CLUSTER_ID"
+
+          if [ ! -f clusters.json ]; then
+            echo "clusters.json not found!"
+            exit 1
+          fi
 
           LINK=$(jq -r --arg id "$CLUSTER_ID" '.[$id]' clusters.json)
 
@@ -37,11 +49,12 @@ jobs:
             echo "link=$LINK" >> $GITHUB_OUTPUT
           fi
 
-      - name: Reply in Issue
-        if: steps.link.outputs.found == 'true'
+      # ✅ Reply in issue with correct link
+      - name: Reply with Box link
+        if: steps.fetch.outputs.found == 'true'
         run: |
           curl -X POST \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github+json" \
           https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \
-          -d "{\"body\":\"Cluster ${{ steps.extract.outputs.cluster_id }} details: ${{ steps.link.outputs.link }}\"}"
+          -d "{\"body\":\"Cluster ${{ steps.extract.outputs.cluster_id }} details: ${{ steps.fetch.outputs.link }}\"}"
