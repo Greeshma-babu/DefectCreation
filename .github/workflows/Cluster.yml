@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 0: Checkout repo
+      # Step 0: Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -78,6 +78,7 @@ jobs:
           else
             echo "found=true" >> $GITHUB_OUTPUT
             echo "link=$LINK" >> $GITHUB_OUTPUT
+          fi
 
       # Step 5: Grant Box access dynamically using shared link
       - name: Grant Box access
@@ -92,7 +93,7 @@ jobs:
             exit 1
           fi
 
-          # Get folder/file ID from shared link
+          # Get folder/file ID from Box shared link
           FOLDER_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.BOX_TOKEN }}" \
             "https://api.box.com/2.0/shared_items?shared_link=$LINK" | jq -r '.id')
 
