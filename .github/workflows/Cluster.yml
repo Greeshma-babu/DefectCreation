@@ -35,8 +35,6 @@ jobs:
               }
             }")
 
-          echo "$RESPONSE"
-
           SCORE=$(echo "$RESPONSE" | jq '.scores[0]')
 
           if (( $(echo "$SCORE > 0.7" | bc -l) )); then
@@ -68,36 +66,42 @@ jobs:
         if: steps.extract.outputs.cluster_id == 'none'
         run: exit 0
 
-      # Step 4: Lookup cluster link & folder ID
-      - name: Get cluster info
+      # Step 4: Get cluster link from clusters.json
+      - name: Get cluster link
         id: fetch
         run: |
           CLUSTER_ID=${{ steps.extract.outputs.cluster_id }}
-          LINK=$(jq -r --arg id "$CLUSTER_ID" '.[$id].link' clusters.json)
-          FOLDER_ID=$(jq -r --arg id "$CLUSTER_ID" '.[$id].folder_id' clusters.json)
+          LINK=$(jq -r --arg id "$CLUSTER_ID" '.[$id]' clusters.json)
 
           if [ "$LINK" = "null" ] || [ -z "$LINK" ]; then
             echo "found=false" >> $GITHUB_OUTPUT
           else
             echo "found=true" >> $GITHUB_OUTPUT
             echo "link=$LINK" >> $GITHUB_OUTPUT
-            echo "folder_id=$FOLDER_ID" >> $GITHUB_OUTPUT
 
-      # Step 5: Grant Box access to the requesting user
+      # Step 5: Grant Box access dynamically using shared link
       - name: Grant Box access
         if: steps.fetch.outputs.found == 'true'
         run: |
+          LINK="${{ steps.fetch.outputs.link }}"
           USERNAME="${{ github.event.comment.user.login }}"
           BOX_EMAIL=$(jq -r --arg USER "$USERNAME" '.[$USER]' emails.json)
-          FOLDER_ID="${{ steps.fetch.outputs.folder_id }}"
 
           if [ -z "$BOX_EMAIL" ] || [ "$BOX_EMAIL" = "null" ]; then
             echo "No Box email found for user $USERNAME"
             exit 1
           fi
 
-          echo "Granting access to $BOX_EMAIL for folder $FOLDER_ID"
+          # Get folder/file ID from shared link
+          FOLDER_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.BOX_TOKEN }}" \
+            "https://api.box.com/2.0/shared_items?shared_link=$LINK" | jq -r '.id')
 
+          if [ -z "$FOLDER_ID" ] || [ "$FOLDER_ID" = "null" ]; then
+            echo "Unable to retrieve folder ID from Box shared link"
+            exit 1
+          fi
+
+          # Grant access
           curl -s -X POST https://api.box.com/2.0/collaborations \
             -H "Authorization: Bearer ${{ secrets.BOX_TOKEN }}" \
             -H "Content-Type: application/json" \
@@ -107,7 +111,7 @@ jobs:
                   \"role\": \"editor\"
                 }"
 
-      # Step 6: Reply with cluster link
+      # Step 6: Reply in GitHub with cluster link
       - name: Reply with cluster link
         if: steps.fetch.outputs.found == 'true'
         run: |
